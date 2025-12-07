@@ -116,8 +116,8 @@ def monitor_page():
             current_time = time.time()
             time_diff = current_time - last_time
             
-            # 10秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
-            if time_diff > 10:
+            # 1秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
+            if time_diff > 1:
                 status_type = "再訪問"
             else:
                 status_type = "再読み込み"
@@ -163,3 +163,4 @@ def get_congestion():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
+
