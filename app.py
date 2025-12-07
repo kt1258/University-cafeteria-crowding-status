@@ -3,15 +3,13 @@ import datetime
 import hashlib
 import urllib.request
 import json
-import csv
 import os
 import requests
-import threading
 
 app = Flask(__name__)
 
 # ==========================================
-# ★設定エリア（あなたのフォーム情報反映済み）
+# ★設定エリア
 # ==========================================
 
 # 1. Googleフォーム設定
@@ -27,9 +25,6 @@ app.secret_key = 'super_secret_session_key_for_experiment'
 # 4. API URL
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
 
-# 5. ローカルログファイル
-LOG_FILE = "access_log.csv"
-
 # ==========================================
 # 内部ロジック
 # ==========================================
@@ -41,41 +36,18 @@ def get_daily_key():
 
 def send_to_google_form(bib_number):
     """
-    バックグラウンドでGoogleフォームにデータを送信する関数
+    Googleフォームにデータを送信する関数（Vercel用に同期処理）
+    ※ここで送信完了を待ってから画面を切り替えます
     """
     try:
-        # 送信するデータ
         form_data = {
             GOOGLE_ENTRY_ID: bib_number
         }
-        # 送信実行
-        requests.post(GOOGLE_FORM_URL, data=form_data)
+        # タイムアウトを3秒に設定（遅すぎる場合は無視して進む）
+        requests.post(GOOGLE_FORM_URL, data=form_data, timeout=3)
         print(f"★Googleフォーム送信成功: {bib_number}")
     except Exception as e:
         print(f"★Googleフォーム送信失敗: {e}")
-
-def save_log(bib_number):
-    """
-    1. サーバー内のCSVに保存
-    2. Googleフォームにも送信（別スレッドで実行）
-    """
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # 1. ローカルCSV保存
-    try:
-        file_exists = os.path.isfile(LOG_FILE)
-        with open(LOG_FILE, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(['Timestamp', 'BibNumber', 'Status'])
-            writer.writerow([now, bib_number, 'Success'])
-        print(f"★CSV保存完了: {bib_number}")
-    except Exception as e:
-        print(f"★CSV保存エラー: {e}")
-
-    # 2. Googleフォームへ送信（画面が固まらないように裏で実行）
-    thread = threading.Thread(target=send_to_google_form, args=(bib_number,))
-    thread.start()
 
 @app.route('/')
 def entry_point():
@@ -87,24 +59,26 @@ def monitor_page():
     user_key = request.args.get('auth')
     correct_key = get_daily_key()
 
+    # キー認証チェック
     if user_key != correct_key:
-        return "<h1>アクセスできません</h1>", 403
+        return "<h1>アクセスできません</h1><p>URLが無効です。</p>", 403
 
-    # POST受信時（ログイン処理）
+    # POST受信時（番号入力→開始ボタン）
     if request.method == 'POST':
         bib_number = request.form.get('bib_number')
         session['bib_number'] = bib_number
         
-        # ログ保存を実行（CSV + Google）
-        save_log(bib_number)
+        # ★変更点：ここでGoogleフォームに送信（完了するまで待つ）
+        send_to_google_form(bib_number)
         
-        return redirect(request.url)
+        # 自分自身にリダイレクト（再読み込み対策）
+        return redirect(f"/monitor?auth={user_key}")
 
     # ログイン状態の確認
     is_logged_in = 'bib_number' in session
 
-    # テンプレートを表示（ログイン済みかどうかのフラグとキーを渡す）
-    return render_template('index.html', is_logged_in=is_logged_in, user_key=user_key)
+    # ★重要：GitHubに「templates/index.html」があることが前提です
+    return render_template('index.html', is_logged_in=is_logged_in)
 
 @app.route('/logout')
 def logout():
@@ -138,5 +112,6 @@ def get_congestion():
     except Exception as e:
         return jsonify({"error": "Failed"}), 500
 
+# Vercelでは if __name__ == '__main__': は無視されますが、念のため残しておきます
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
