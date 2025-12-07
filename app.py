@@ -4,7 +4,7 @@ import json
 import requests
 import os
 import time  # 時間計測用に追加
-from datetime import timedelta # セッション寿命設定用
+from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
@@ -24,18 +24,21 @@ GOOGLE_STATUS_ENTRY_ID = "entry.534457742"  # アクション（ログイン/再
 app.secret_key = 'super_secret_session_key_for_experiment'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 
-# 3. API URL
+# 3. 日本時間(JST)の定義
+JST = timezone(timedelta(hours=9), 'JST')
+
+# 4. API URL
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
 
 # ==========================================
 # 内部ロジック
 # ==========================================
+def get_today_str():
+    """日本時間の「今日の日付」を文字列で返す (例: '2025-12-07')"""
+    return datetime.now(JST).strftime('%Y-%m-%d')
 
 def send_to_google_form(bib_number, student_id, status_type):
-    """
-    Googleフォームにデータを送信する
-    status_type: "Login" または "Reload"
-    """
+    """Googleフォームにデータを送信する"""
     try:
         form_data = {
             GOOGLE_BIB_ENTRY_ID: bib_number,
@@ -66,7 +69,10 @@ def monitor_page():
         session['bib_number'] = bib_number
         session['student_id'] = student_id
 
-        # ★重要：「今ログインしたばかり」という目印(フラグ)を立てる
+        # ログインした「日付(JST)」を記録する
+        session['login_date'] = get_today_str()
+
+        # 「今ログインしたばかり」という目印(フラグ)を立てる
         session['just_logged_in'] = True
         # 最終アクセス時刻を記録
         session['last_access_time'] = time.time()
@@ -83,29 +89,42 @@ def monitor_page():
     # ログイン済みかチェック
     is_logged_in = 'bib_number' in session
 
+    # ログイン済みの場合、日付チェックを行う
     if is_logged_in:
-        # セッションから情報を取得
+        # (A) 日付またぎチェック
+        login_date = session.get('login_date')
+        today_date = get_today_str()
+        
+        if login_date != today_date:
+            # ログインした日と今日が違う ＝ 日付が変わった
+            # 強制ログアウトさせる
+            session.clear()
+            return redirect("/monitor")
+
+    if is_logged_in:
+        # (B) ログ送信ロジック
         bib_number = session.get('bib_number')
         student_id = session.get('student_id', '不明')
         
         if session.get('just_logged_in'):
-            # 「今ログインしたばかり」のフラグがある場合
-            # → すでにPOSTでログを送ったので、ここでは何もしない
-            # → フラグを削除して、次回からは「リロード」とみなすようにする
+            # ログイン直後のリダイレクト
             session.pop('just_logged_in', None)
             
         else:
-            # 前回のアクセスからどれくらい時間が経ったか？
+            # 再読み込み判定
             last_time = session.get('last_access_time', 0)
             current_time = time.time()
             time_diff = current_time - last_time
             
-            # 1秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
-            if time_diff > 1:
+            # 10秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
+            if time_diff > 10:
                 status_type = "再訪問"
             else:
                 status_type = "再読み込み"
             send_to_google_form(bib_number, student_id, status_type)
+
+        # 最終アクセス時刻を記録
+        session['last_access_time'] = time.time()
 
     return render_template('index.html', is_logged_in=is_logged_in)
 
@@ -144,4 +163,3 @@ def get_congestion():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
-
