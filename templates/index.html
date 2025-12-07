@@ -181,7 +181,21 @@
 
 <body class="{% if not is_logged_in %}login-mode{% endif %}">
 
-{% if is_logged_in %}
+  {% if not is_logged_in %}
+  <div class="login-container">
+    <h2>実証実験への参加<br>ありがとうございます</h2>
+    <p>学籍番号とビブス番号を入力して<br>「開始」を押してください。</p>
+    
+    <form method="POST" action="/monitor">
+      <input type="text" name="student_id" class="login-input" placeholder="学籍番号" required autofocus>
+      <input type="number" name="bib_number" class="login-input" placeholder="ビブスNo." required>
+      <br>
+      <button type="submit" class="login-button">開始</button>
+    </form>
+  </div>
+
+
+  {% else %}
   <div class="container">
     <div class="title">食堂混雑状況</div>
     <div class="info-text">最終更新 : <span id="last-update">--:--</span></div>
@@ -308,21 +322,7 @@
       intervalTimer = setInterval(updateDisplay, UPDATE_INTERVAL);
     }
   </script>
-
-{% else %}
-  <div class="login-container">
-    <h2>実証実験への参加<br>ありがとうございます</h2>
-    <p>学籍番号とビブス番号を入力して<br>「開始」を押してください。</p>
-    <form method="POST" action="/monitor?auth={{ user_key }}">
-      <input type="text" name="student_id" class="login-input" placeholder="学籍番号" required autofocus>
-      
-      <input type="number" name="bib_number" class="login-input" placeholder="ビブスNo." required>
-      
-      <br>
-      <button type="submit" class="login-button">開始</button>
-    </form>
-  </div>
-{% endif %}
+  {% endif %}
 
 </body>
 </html>
