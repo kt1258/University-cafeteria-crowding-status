@@ -95,14 +95,12 @@ def monitor_page():
             session.pop('just_logged_in', None)
             
         else:
-            # パターンB: 再読み込み、またはブラウザを開き直した
-            
             # 前回のアクセスからどれくらい時間が経ったか？
             last_time = session.get('last_access_time', 0)
             current_time = time.time()
             time_diff = current_time - last_time
             
-            # ★判定: 1秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
+            # 1秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
             if time_diff > 1:
                 status_type = "再訪問"
             else:
@@ -146,3 +144,4 @@ def get_congestion():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
+
