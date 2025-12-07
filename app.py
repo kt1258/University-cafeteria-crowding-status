@@ -78,7 +78,7 @@ def monitor_page():
     is_logged_in = 'bib_number' in session
 
     # ★重要：GitHubに「templates/index.html」があることが前提です
-    return render_template('index.html', is_logged_in=is_logged_in)
+    return render_template('index.html', is_logged_in=is_logged_in, user_key=user_key)
 
 @app.route('/logout')
 def logout():
@@ -115,3 +115,4 @@ def get_congestion():
 # Vercelでは if __name__ == '__main__': は無視されますが、念のため残しておきます
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
+
