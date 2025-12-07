@@ -312,9 +312,12 @@
 {% else %}
   <div class="login-container">
     <h2>実証実験への参加<br>ありがとうございます</h2>
-    <p>ビブス番号を入力して「開始」を押してください。</p>
+    <p>学籍番号とビブス番号を入力して<br>「開始」を押してください。</p>
     <form method="POST" action="/monitor?auth={{ user_key }}">
-      <input type="number" name="bib_number" class="login-input" placeholder="No." required autofocus>
+      <input type="text" name="student_id" class="login-input" placeholder="学籍番号" required autofocus>
+      
+      <input type="number" name="bib_number" class="login-input" placeholder="ビブスNo." required>
+      
       <br>
       <button type="submit" class="login-button">開始</button>
     </form>
