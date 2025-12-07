@@ -1,10 +1,8 @@
 from flask import Flask, render_template, redirect, request, jsonify, session
-import datetime
-import hashlib
 import urllib.request
 import json
-import os
 import requests
+import os
 
 app = Flask(__name__)
 
@@ -14,75 +12,95 @@ app = Flask(__name__)
 
 # 1. Googleフォーム設定
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSciqGnzibVfBcio_dphX3Yotm0A7um-OUDqGV_Ycx63g3gSsQ/formResponse"
-GOOGLE_ENTRY_ID = "entry.783812582"
 
-# 2. 管理者だけの秘密の言葉
-SECRET_SALT = "Univ_Cafeteria_Secret_2025_Ver1" 
+# ★既存の設定（ビブス番号と学籍番号）
+GOOGLE_BIB_ENTRY_ID = "entry.783812582"  # ビブスの番号
+GOOGLE_STUDENT_ENTRY_ID = "entry.2142499798"  # 学籍番号
+GOOGLE_STATUS_ENTRY_ID = "entry.534457742"  # アクション
 
-# 3. セッションキー
+# 2. セッションキー
 app.secret_key = 'super_secret_session_key_for_experiment'
 
-# 4. API URL
+# 3. API URL
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
 
 # ==========================================
 # 内部ロジック
 # ==========================================
 
-def get_daily_key():
-    today_str = datetime.date.today().strftime('%Y-%m-%d')
-    mix_str = today_str + SECRET_SALT
-    return hashlib.sha256(mix_str.encode()).hexdigest()[:10]
-
-def send_to_google_form(bib_number):
+def send_to_google_form(bib_number, student_id, status_type):
     """
-    Googleフォームにデータを送信する関数（Vercel用に同期処理）
-    ※ここで送信完了を待ってから画面を切り替えます
+    Googleフォームにデータを送信する
+    status_type: "Login" または "Reload"
     """
     try:
         form_data = {
-            GOOGLE_ENTRY_ID: bib_number
+            GOOGLE_BIB_ENTRY_ID: bib_number,
+            GOOGLE_STUDENT_ENTRY_ID: student_id,
+            GOOGLE_STATUS_ENTRY_ID: status_type  # 状態（ログイン/リロード）も送信
         }
-        # タイムアウトを3秒に設定（遅すぎる場合は無視して進む）
+        # タイムアウト3秒
         requests.post(GOOGLE_FORM_URL, data=form_data, timeout=3)
-        print(f"★Googleフォーム送信成功: {bib_number}")
+        print(f"★ログ送信({status_type}): 学籍{student_id} / ビブス{bib_number}")
     except Exception as e:
-        print(f"★Googleフォーム送信失敗: {e}")
+        print(f"★ログ送信失敗: {e}")
 
 @app.route('/')
 def entry_point():
-    daily_key = get_daily_key()
-    return redirect(f"/monitor?auth={daily_key}")
+    return redirect("/monitor")
 
 @app.route('/monitor', methods=['GET', 'POST'])
 def monitor_page():
-    user_key = request.args.get('auth')
-    correct_key = get_daily_key()
-
-    # キー認証チェック
-    if user_key != correct_key:
-        return "<h1>アクセスできません</h1><p>URLが無効です。</p>", 403
-
-    # POST受信時（番号入力→開始ボタン）
+    # -------------------------------------------------
+    # 1. ログイン処理（POST）
+    # -------------------------------------------------
     if request.method == 'POST':
         bib_number = request.form.get('bib_number')
+        student_id = request.form.get('student_id')
+        
+        # セッションに保存
         session['bib_number'] = bib_number
+        session['student_id'] = student_id
         
-        # ★変更点：ここでGoogleフォームに送信（完了するまで待つ）
-        send_to_google_form(bib_number)
+        # ★重要：「今ログインしたばかり」という目印(フラグ)を立てる
+        session['just_logged_in'] = True
         
-        # 自分自身にリダイレクト（再読み込み対策）
-        return redirect(f"/monitor?auth={user_key}")
+        # ここで「ログイン」としてログ送信
+        send_to_google_form(bib_number, student_id, "ログイン")
+        
+        return redirect("/monitor")
 
-    # ログイン状態の確認
+    # -------------------------------------------------
+    # 2. ページ表示処理（GET）
+    # -------------------------------------------------
+    
+    # ログイン済みかチェック
     is_logged_in = 'bib_number' in session
 
-    # ★重要：GitHubに「templates/index.html」があることが前提です
-    return render_template('index.html', is_logged_in=is_logged_in, user_key=user_key)
+    if is_logged_in:
+        # セッションから情報を取得
+        bib_number = session.get('bib_number')
+        student_id = session.get('student_id', '不明')
+
+        # ★判定ロジック：ログイン直後のリダイレクトか、手動リロードか？
+        
+        if session.get('just_logged_in'):
+            # 「今ログインしたばかり」のフラグがある場合
+            # → すでにPOSTでログを送ったので、ここでは何もしない
+            # → フラグを削除して、次回からは「リロード」とみなすようにする
+            session.pop('just_logged_in', None)
+            
+        else:
+            # フラグがない場合 ＝ 純粋なリロード（再読み込み）
+            # → 「Reload」としてログ送信
+            send_to_google_form(bib_number, student_id, "再読み込み")
+
+    return render_template('index.html', is_logged_in=is_logged_in)
 
 @app.route('/logout')
 def logout():
     session.pop('bib_number', None)
+    session.pop('student_id', None)
     return redirect('/')
 
 @app.route('/api/congestion')
@@ -112,7 +130,5 @@ def get_congestion():
     except Exception as e:
         return jsonify({"error": "Failed"}), 500
 
-# Vercelでは if __name__ == '__main__': は無視されますが、念のため残しておきます
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
-
