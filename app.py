@@ -3,6 +3,8 @@ import urllib.request
 import json
 import requests
 import os
+import time  # 時間計測用に追加
+from datetime import timedelta # セッション寿命設定用
 
 app = Flask(__name__)
 
@@ -16,10 +18,11 @@ GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSciqGnzibVfBcio_dphX
 # ★既存の設定（ビブス番号と学籍番号）
 GOOGLE_BIB_ENTRY_ID = "entry.783812582"  # ビブスの番号
 GOOGLE_STUDENT_ENTRY_ID = "entry.2142499798"  # 学籍番号
-GOOGLE_STATUS_ENTRY_ID = "entry.534457742"  # アクション
+GOOGLE_STATUS_ENTRY_ID = "entry.534457742"  # アクション（ログイン/再読み込み/再訪問）
 
 # 2. セッションキー
 app.secret_key = 'super_secret_session_key_for_experiment'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 
 # 3. API URL
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
@@ -37,7 +40,7 @@ def send_to_google_form(bib_number, student_id, status_type):
         form_data = {
             GOOGLE_BIB_ENTRY_ID: bib_number,
             GOOGLE_STUDENT_ENTRY_ID: student_id,
-            GOOGLE_STATUS_ENTRY_ID: status_type  # 状態（ログイン/リロード）も送信
+            GOOGLE_STATUS_ENTRY_ID: status_type  # 状態（ログイン/再読み込み/再訪問）も送信
         }
         # タイムアウト3秒
         requests.post(GOOGLE_FORM_URL, data=form_data, timeout=3)
@@ -59,11 +62,14 @@ def monitor_page():
         student_id = request.form.get('student_id')
         
         # セッションに保存
+        session.permanent = True
         session['bib_number'] = bib_number
         session['student_id'] = student_id
-        
+
         # ★重要：「今ログインしたばかり」という目印(フラグ)を立てる
         session['just_logged_in'] = True
+        # 最終アクセス時刻を記録
+        session['last_access_time'] = time.time()
         
         # ここで「ログイン」としてログ送信
         send_to_google_form(bib_number, student_id, "ログイン")
@@ -81,8 +87,6 @@ def monitor_page():
         # セッションから情報を取得
         bib_number = session.get('bib_number')
         student_id = session.get('student_id', '不明')
-
-        # ★判定ロジック：ログイン直後のリダイレクトか、手動リロードか？
         
         if session.get('just_logged_in'):
             # 「今ログインしたばかり」のフラグがある場合
@@ -91,9 +95,19 @@ def monitor_page():
             session.pop('just_logged_in', None)
             
         else:
-            # フラグがない場合 ＝ 純粋なリロード（再読み込み）
-            # → 「Reload」としてログ送信
-            send_to_google_form(bib_number, student_id, "再読み込み")
+            # パターンB: 再読み込み、またはブラウザを開き直した
+            
+            # 前回のアクセスからどれくらい時間が経ったか？
+            last_time = session.get('last_access_time', 0)
+            current_time = time.time()
+            time_diff = current_time - last_time
+            
+            # ★判定: 10秒以上空いていたら「再訪問(Revisit)」、それ以内なら「再読み込み(Reload)」
+            if time_diff > 10:
+                status_type = "再訪問"
+            else:
+                status_type = "再読み込み"
+            send_to_google_form(bib_number, student_id, status_type)
 
     return render_template('index.html', is_logged_in=is_logged_in)
 
