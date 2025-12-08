@@ -97,52 +97,52 @@ def logout():
 @app.route('/api/congestion')
 def get_congestion():
     try:
+        # -----------------------------------------------
+        # ★追加: 「視聴中」ログの送信ロジック (Heartbeat)
+        # -----------------------------------------------
+        if 'bib_number' in session:
+            last_time = session.get('last_access_time', 0)
+            current_time = time.time()
+            
+            # 前回のアクセスから60秒以上経過していたらログを送る
+            if (current_time - last_time) > 60:
+                bib = session['bib_number']
+                stu = session.get('student_id', '不明')
+                
+                # "視聴中" としてログ送信
+                send_to_google_form(bib, stu, "視聴中")
+                
+                # 最終アクセス時刻を更新
+                session['last_access_time'] = current_time
+
+        # -----------------------------------------------
+        # 以下、既存の処理
+        # -----------------------------------------------
         with urllib.request.urlopen(API_URL) as response:
             data = json.loads(response.read().decode())
         
-        # -----------------------------------------------
         # 1. AWSからの新しいデータ形式を取得
-        # -----------------------------------------------
-        # W: 現在の行列人数
         w_current = float(data.get('W', 0))
-        
-        # 入室平均
         in1_ave = float(data.get('in_1ave3', 0))
         in2_ave = float(data.get('in_2ave5', 0))
-        
-        # 時間帯ダミー
         d1 = float(data.get('d1', 0))
         d2 = float(data.get('d2', 0))
         d3 = float(data.get('d3', 0))
-        
-        # 時刻 (datetime)
         timestamp_str = data.get('datetime')
 
-        # -----------------------------------------------
         # 2. モデル予測 (T+5)
-        # -----------------------------------------------
-        # シンプルになった関数を呼び出すだけ
         predicted_people = model.predict_model2(
             w_current, in1_ave, in2_ave, d1, d2, d3
         )
         
-        # -----------------------------------------------
         # 3. 現在の待ち時間計算
-        # -----------------------------------------------
-        # AWSから来た「W（現在の行列人数）」を使って計算します
-        # Wが0なら、待ち時間も0分00秒になります
         current_wait_min = w_current / model.PEOPLE_PER_MINUTE
-        
         display_minutes = int(current_wait_min)
         display_seconds = int((current_wait_min - display_minutes) * 60)
 
-        # -----------------------------------------------
-        # 4. 混雑予報判定 (予測値 vs 実測値)
-        # -----------------------------------------------
+        # 4. 混雑予報判定
         forecast_text = ""
         forecast_val = "3" 
-        
-        # 予測値(predicted_people) と 現在値(w_current) を比較
         diff = predicted_people - w_current
         THRESHOLD = 5
         
@@ -158,18 +158,16 @@ def get_congestion():
             forecast_text = "stable"
             forecast_val = "-"
 
-        # -----------------------------------------------
         # 5. レスポンス作成
-        # -----------------------------------------------
         response_data = {
-            "current_people": w_current,        # Wの値をそのまま入れる
+            "current_people": w_current,
             "predicted_people": predicted_people,
-            "wait_minutes": current_wait_min,   # Wベースの時間
+            "wait_minutes": current_wait_min,
             "display_minutes": display_minutes,
             "display_seconds": display_seconds,
             "forecast_text": forecast_text,
             "forecast_val": forecast_val,
-            "last_clip_ts": timestamp_str       # AWSの 'datetime' を入れる
+            "last_clip_ts": timestamp_str
         }
         
         return jsonify(response_data)
