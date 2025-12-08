@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-# model.py はそのまま使用
+# 新しくした model.py を読み込み
 import model 
 
 app = Flask(__name__)
@@ -23,6 +23,7 @@ app.secret_key = 'super_secret_session_key_for_experiment'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 JST = timezone(timedelta(hours=9), 'JST')
 
+# API URL (ここは変わりません)
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
 
 # ==========================================
@@ -99,34 +100,50 @@ def get_congestion():
         with urllib.request.urlopen(API_URL) as response:
             data = json.loads(response.read().decode())
         
-        # 1. データ取得
-        e_kaede   = float(data.get('in_kaede', 0))
-        e_satsuki = float(data.get('in_satsuki', 0))
-        l_kaede   = float(data.get('out_kaede', 0))
-        l_satsuki = float(data.get('out_satsuki', 0))
-        c_machine = float(data.get('queue_machine', 0))
-        current_people = float(data.get('current_people', 0))
+        # -----------------------------------------------
+        # 1. AWSからの新しいデータ形式を取得
+        # -----------------------------------------------
+        # W: 現在の行列人数
+        w_current = float(data.get('W', 0))
+        
+        # 入室平均
+        in1_ave = float(data.get('in_1ave3', 0))
+        in2_ave = float(data.get('in_2ave5', 0))
+        
+        # 時間帯ダミー
+        d1 = float(data.get('d1', 0))
+        d2 = float(data.get('d2', 0))
+        d3 = float(data.get('d3', 0))
+        
+        # 時刻 (datetime)
+        timestamp_str = data.get('datetime')
 
+        # -----------------------------------------------
         # 2. モデル予測 (T+5)
-        now_jst = datetime.now(JST)
+        # -----------------------------------------------
+        # シンプルになった関数を呼び出すだけ
         predicted_people = model.predict_model2(
-            now_jst, e_kaede, e_satsuki, l_kaede, l_satsuki, c_machine
+            w_current, in1_ave, in2_ave, d1, d2, d3
         )
         
-        # 3. 現在の待ち時間計算 (★修正: 実測値を使用)
-        # 画像の指示通り「現在の待ち時間」を表示するため、実測値を使います。
-        # これで0人の時は「0分00秒」になります。
-        current_wait_min = current_people / model.PEOPLE_PER_MINUTE
+        # -----------------------------------------------
+        # 3. 現在の待ち時間計算
+        # -----------------------------------------------
+        # AWSから来た「W（現在の行列人数）」を使って計算します
+        # Wが0なら、待ち時間も0分00秒になります
+        current_wait_min = w_current / model.PEOPLE_PER_MINUTE
+        
         display_minutes = int(current_wait_min)
         display_seconds = int((current_wait_min - display_minutes) * 60)
 
+        # -----------------------------------------------
         # 4. 混雑予報判定 (予測値 vs 実測値)
-        # ユーザー(T+2) から見た 未来(T+5) なので「3分後」の予報
+        # -----------------------------------------------
         forecast_text = ""
         forecast_val = "3" 
         
-        diff = predicted_people - current_people
-        
+        # 予測値(predicted_people) と 現在値(w_current) を比較
+        diff = predicted_people - w_current
         THRESHOLD = 5
         
         if diff > THRESHOLD:
@@ -141,16 +158,18 @@ def get_congestion():
             forecast_text = "stable"
             forecast_val = "-"
 
+        # -----------------------------------------------
         # 5. レスポンス作成
+        # -----------------------------------------------
         response_data = {
-            "current_people": current_people,
+            "current_people": w_current,        # Wの値をそのまま入れる
             "predicted_people": predicted_people,
-            "wait_minutes": current_wait_min,
+            "wait_minutes": current_wait_min,   # Wベースの時間
             "display_minutes": display_minutes,
             "display_seconds": display_seconds,
             "forecast_text": forecast_text,
             "forecast_val": forecast_val,
-            "last_clip_ts": data.get('last_clip_ts')
+            "last_clip_ts": timestamp_str       # AWSの 'datetime' を入れる
         }
         
         return jsonify(response_data)
