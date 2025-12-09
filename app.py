@@ -148,7 +148,7 @@ def get_congestion():
 
         # 4. 混雑予報判定
         forecast_text = ""
-        forecast_val = "3" 
+        forecast_val = "5" 
         diff = predicted_people - w_current
         THRESHOLD = 5
         
@@ -184,3 +184,4 @@ def get_congestion():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
+
