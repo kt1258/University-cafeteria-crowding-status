@@ -136,7 +136,12 @@ def get_congestion():
         )
         
         # 3. 現在の待ち時間計算
-        current_wait_min = w_current / model.PEOPLE_PER_MINUTE
+        display_base_people = predicted_people
+        
+        if w_current == 0:
+            display_base_people = 0
+            
+        current_wait_min = display_base_people / model.PEOPLE_PER_MINUTE
         display_minutes = int(current_wait_min)
         display_seconds = int((current_wait_min - display_minutes) * 60)
 
