@@ -136,14 +136,15 @@ def get_congestion():
         )
         
         # 3. 現在の待ち時間計算
-        display_base_people = predicted_people
+        display_base_people = w_current
         
+        # (Wが0なら自動的に0秒になりますが、念のため判定を残してもOKです)
         if w_current == 0:
             display_base_people = 0
             
-        current_wait_min = display_base_people / model.PEOPLE_PER_MINUTE
-        display_minutes = int(current_wait_min)
-        display_seconds = int((current_wait_min - display_minutes) * 60)
+        wait_min_val = display_base_people / model.PEOPLE_PER_MINUTE
+        display_minutes = int(wait_min_val)
+        display_seconds = int((wait_min_val - display_minutes) * 60)
 
         # 4. 混雑予報判定
         forecast_text = ""
@@ -167,7 +168,7 @@ def get_congestion():
         response_data = {
             "current_people": w_current,
             "predicted_people": predicted_people,
-            "wait_minutes": current_wait_min,
+            "wait_minutes": wait_min_val,
             "display_minutes": display_minutes,
             "display_seconds": display_seconds,
             "forecast_text": forecast_text,
