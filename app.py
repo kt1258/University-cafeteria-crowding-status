@@ -1,5 +1,5 @@
 from flask import Flask, render_template, redirect, request, jsonify, session
-import urllib.request
+import threading
 import json
 import requests
 import os
@@ -19,12 +19,16 @@ GOOGLE_BIB_ENTRY_ID = "entry.783812582"
 GOOGLE_STUDENT_ENTRY_ID = "entry.2142499798"
 GOOGLE_STATUS_ENTRY_ID = "entry.534457742"
 
-app.secret_key = 'super_secret_session_key_for_experiment'
+# セッション設定（環境変数から読み込み、なければデフォルト値を使用）
+app.secret_key = os.environ.get('SECRET_KEY', 'super_secret_session_key_for_experiment')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 JST = timezone(timedelta(hours=9), 'JST')
 
-# API URL (ここは変わりません)
+# API URL
 API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
+
+# ログ送信のインターバル（秒）
+HEARTBEAT_INTERVAL = 60
 
 # ==========================================
 # 内部ロジック
@@ -32,17 +36,27 @@ API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?b
 def get_today_str():
     return datetime.now(JST).strftime('%Y-%m-%d')
 
-def send_to_google_form(bib_number, student_id, status_type):
+def _send_to_google_form_worker(bib_number, student_id, status_type):
+    """バックグラウンドで実行される実際の送信処理"""
     try:
         form_data = {
             GOOGLE_BIB_ENTRY_ID: bib_number,
             GOOGLE_STUDENT_ENTRY_ID: student_id,
             GOOGLE_STATUS_ENTRY_ID: status_type
         }
-        requests.post(GOOGLE_FORM_URL, data=form_data, timeout=3)
+        requests.post(GOOGLE_FORM_URL, data=form_data, timeout=5)
         print(f"★ログ送信({status_type}): 学籍{student_id} / ビブス{bib_number}")
     except Exception as e:
         print(f"★ログ送信失敗: {e}")
+
+def send_to_google_form(bib_number, student_id, status_type):
+    """Google Formへの送信を非同期で行うラッパー関数"""
+    thread = threading.Thread(
+        target=_send_to_google_form_worker,
+        args=(bib_number, student_id, status_type)
+    )
+    thread.daemon = True # メインプロセス終了時に道連れにする
+    thread.start()
 
 # ==========================================
 # ルーティング
@@ -80,7 +94,7 @@ def monitor_page():
             session.pop('just_logged_in', None)
         else:
             last_time = session.get('last_access_time', 0)
-            if (time.time() - last_time) > 60:
+            if (time.time() - last_time) > HEARTBEAT_INTERVAL:
                 send_to_google_form(bib_number, student_id, "再訪問")
             else:
                 send_to_google_form(bib_number, student_id, "再読み込み")
@@ -104,8 +118,8 @@ def get_congestion():
             last_time = session.get('last_access_time', 0)
             current_time = time.time()
             
-            # 前回のアクセスから60秒以上経過していたらログを送る
-            if (current_time - last_time) > 60:
+            # 前回のアクセスからHEARTBEAT_INTERVAL秒以上経過していたらログを送る
+            if (current_time - last_time) > HEARTBEAT_INTERVAL:
                 bib = session['bib_number']
                 stu = session.get('student_id', '不明')
                 
@@ -118,8 +132,13 @@ def get_congestion():
         # -----------------------------------------------
         # 以下、既存の処理
         # -----------------------------------------------
-        with urllib.request.urlopen(API_URL) as response:
-            data = json.loads(response.read().decode())
+        try:
+            response = requests.get(API_URL, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"API Request Error: {e}")
+            return jsonify({"error": "Failed to fetch data from AWS"}), 502
         
         # 1. AWSからの新しいデータ形式を取得
         w_current = float(data.get('W', 0))
@@ -148,15 +167,25 @@ def get_congestion():
 
         # 4. 混雑予報判定
         forecast_text = ""
-        forecast_val = "3" 
+        forecast_val = "-" 
         diff = predicted_people - w_current
-        THRESHOLD = 5
+        THRESHOLD = 0
         
         if diff > THRESHOLD:
+            # 差分を待ち時間（分秒）に変換
+            diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
+            diff_minutes = int(diff_wait_time)
+            diff_seconds = int((diff_wait_time - diff_minutes) * 60)
             forecast_text = "increase"
+            forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
         elif diff < -THRESHOLD:
             if predicted_people < 20: 
+                # 差分を待ち時間（分秒）に変換
+                diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
+                diff_minutes = int(diff_wait_time)
+                diff_seconds = int((diff_wait_time - diff_minutes) * 60)
                 forecast_text = "decrease"
+                forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
             else:
                 forecast_text = "stable"
                 forecast_val = "-"
@@ -180,9 +209,7 @@ def get_congestion():
 
     except Exception as e:
         print(f"Error in /api/congestion: {e}")
-        return jsonify({"error": "Failed"}), 500
+        return jsonify({"error": "Internal Server Error"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
-
-
