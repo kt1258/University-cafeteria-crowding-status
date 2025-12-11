@@ -270,8 +270,8 @@
     <div class="title">食堂混雑状況</div>
     <div class="info-text">最終更新 : <span id="last-update">--:--</span></div>
     <div class="info-text" id="service-time">食事提供 : 11:30〜13:30</div>
-    <div class="menu-text"><a href="https://aimgrp-lgf.jp/0002243" target="_blank"
-        rel="noopener noreferrer">メニューはこちらから</a></div>
+    <div class="menu-text"><a href="https://aimgrp-lgf.jp/0002243" target="_blank" rel="noopener noreferrer"
+        aria-label="食堂のメニューを新しいタブで開く">メニューはこちらから</a></div>
 
     <div class="wait-time-section">
       <div class="wait-label">現在の待ち時間</div>
@@ -279,6 +279,8 @@
       <div class="congestion-icon-section">
         <div id="congestion-icons"><i class="fa-solid fa-person"></i></div>
         <div id="congestion-text">データ取得中...</div>
+      </div>
+      <div id="error-message" style="display: none; color: #dc3545; margin-top: 15px; font-size: 1.2em;">データ取得に失敗しました
       </div>
     </div>
 
@@ -336,7 +338,7 @@
         const res = await fetch(API_URL + '?t=' + new Date().getTime());
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const data = await res.json();
-        console.log("取得データ:", data);
+        // console.log("取得データ:", data);
 
         // --- 時間処理 (修正版: last_clip_ts を使用) ---
         const rawTimeStr = data.last_clip_ts;
@@ -345,7 +347,7 @@
           // 例: "2025-12-08T13:59:11" をパース
           const dateObj = new Date(rawTimeStr);
           if (!isNaN(dateObj.getTime())) {
-            formattedTime = dateObj.getHours() + ":" + dateObj.getMinutes().toString().padStart(2, '0');
+            formattedTime = dateObj.getHours().toString().padStart(2, '0') + ":" + dateObj.getMinutes().toString().padStart(2, '0');
           }
         }
 
@@ -386,8 +388,22 @@
         // 色とアイコンの更新
         updateCongestionVisuals(data.wait_minutes);
 
-      } catch (e) { console.error("データ取得エラー:", e); }
+        // エラーメッセージを非表示
+        const errorMsg = document.getElementById("error-message");
+        if (errorMsg) errorMsg.style.display = "none";
+
+      } catch (e) {
+        console.error("データ取得エラー:", e);
+        // エラーメッセージを表示
+        const errorMsg = document.getElementById("error-message");
+        if (errorMsg) errorMsg.style.display = "block";
+      }
     }
+
+    // ページ離脱時にタイマーをクリーンアップ
+    window.addEventListener('beforeunload', () => {
+      if (intervalTimer) clearInterval(intervalTimer);
+    });
 
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function () {
