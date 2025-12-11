@@ -182,19 +182,15 @@ def get_congestion():
             else:
                 forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
         elif diff < -THRESHOLD:
-            if predicted_people < 20: 
-                # 差分を待ち時間（分秒）に変換
-                diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
-                diff_minutes = int(diff_wait_time)
-                diff_seconds = int((diff_wait_time - diff_minutes) * 60)
-                forecast_text = "decrease"
-                if diff_minutes == 0:
-                    forecast_val = f"{diff_seconds}秒"
-                else:
-                    forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
+            # 差分を待ち時間（分秒）に変換
+            diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
+            diff_minutes = int(diff_wait_time)
+            diff_seconds = int((diff_wait_time - diff_minutes) * 60)
+            forecast_text = "decrease"
+            if diff_minutes == 0:
+                forecast_val = f"{diff_seconds}秒"
             else:
-                forecast_text = "stable"
-                forecast_val = "-"
+                forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
         else:
             forecast_text = "stable"
             forecast_val = "-"
