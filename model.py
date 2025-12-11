@@ -19,10 +19,21 @@ PEOPLE_PER_MINUTE = 6.66
 # 予測ロジック関数
 # ==========================================
 
-def predict_model2(w, in1_ave, in2_ave, d1, d2, d3):
+def predict_model2(w: float, in1_ave: float, in2_ave: float, d1: float, d2: float, d3: float) -> float:
     """
     AWSから受け取った計算済みデータを使って予測する
     W(T+5) = b0 + b1*W + b2*in_1ave3 + b3*in_2ave5 + b4*d1 + b5*d2 + b6*d3
+    
+    Args:
+        w: 現在の行列人数
+        in1_ave: かえで側の3分平均入場者数
+        in2_ave: さつき側の5分平均入場者数
+        d1: 12:00-12:19のダミー変数(0 or 1)
+        d2: 12:20-12:39のダミー変数(0 or 1)
+        d3: 12:40-12:59のダミー変数(0 or 1)
+    
+    Returns:
+        float: 5分後の予測行列人数（最小値0）
     """
     c = MODEL_COEFFS
     
