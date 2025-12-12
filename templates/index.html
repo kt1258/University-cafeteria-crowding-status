@@ -1,676 +1,192 @@
-<!DOCTYPE html>
-<html lang="ja">
+from flask import Flask, render_template, redirect, request, jsonify, session
+import threading
+import json
+import requests
+import os
+import time
+from datetime import datetime, timedelta, timezone
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% if is_logged_in %}食堂混雑状況{% else %}参加者ログイン{% endif %}</title>
-  <!-- Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap"
-    rel="stylesheet">
-  <!-- FontAwesome (Keep for login page just in case, though design uses icons in css now) -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    :root {
-      --primary-color: #2563EB;
-      /* Stronger Blue */
-      --text-main: #111827;
-      /* Darker Gray for main text */
-      --text-sub: #4B5563;
-      /* Sub text */
-      --bg-body: #F3F4F6;
-      /* Light gray body bg */
-      --bg-card: #FFFFFF;
-      --badge-bg: #DBEAFE;
-      /* Light blue */
-      --badge-text: #1E40AF;
-      /* Dark blue text */
-      --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    }
+# 新しくした model.py を読み込み
+# 新しくした model.py と storage.py を読み込み
+import model
+import storage
 
-    body {
-      font-family: 'Inter', 'Noto Sans JP', sans-serif;
-      background-color: var(--bg-body);
-      color: var(--text-main);
-      margin: 0;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      min-height: 100vh;
-    }
+app = Flask(__name__)
 
-    .container {
-      width: 100%;
-      max-width: 640px;
-    }
+# ==========================================
+# 設定エリア
+# ==========================================
+# セッション設定（環境変数から読み込み、なければデフォルト値を使用）
+app.secret_key = os.environ.get('SECRET_KEY', 'super_secret_session_key_for_experiment')
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
+JST = timezone(timedelta(hours=9), 'JST')
 
-    /* Card Style */
-    .card {
-      background-color: var(--bg-card);
-      border-radius: 16px;
-      box-shadow: var(--shadow-card);
-      padding: 40px;
-      text-align: center;
-    }
+# API URL
+API_URL = "https://vbzjq2fe2g.execute-api.ap-northeast-1.amazonaws.com/v1/live?building_id=main_building"
 
-    h1 {
-      font-size: 28px;
-      font-weight: 700;
-      margin-bottom: 8px;
-      margin-top: 0;
-      color: var(--text-main);
-    }
+# ログ送信のインターバル（秒）
+HEARTBEAT_INTERVAL = 60
 
-    .info-text {
-      font-size: 16px;
-      color: var(--text-main);
-      margin-bottom: 40px;
-      font-weight: 500;
-    }
+# ==========================================
+# 内部ロジック
+# ==========================================
+def get_today_str():
+    return datetime.now(JST).strftime('%Y-%m-%d')
 
-    .status-section {
-      margin-bottom: 40px;
-      padding: 20px 0;
-      border-top: 1px solid #E5E7EB;
-      border-bottom: 1px solid #E5E7EB;
-    }
+# ==========================================
+# ルーティング
+# ==========================================
+@app.route('/')
+def entry_point():
+    return redirect("/monitor")
 
-    .header-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-    }
+@app.route('/monitor', methods=['GET', 'POST'])
+def monitor_page():
+    if request.method == 'POST':
+        bib_number = request.form.get('bib_number')
+        student_id = request.form.get('student_id')
+        session.permanent = True
+        session['bib_number'] = bib_number
+        session['student_id'] = student_id
+        session['login_date'] = get_today_str()
+        session['just_logged_in'] = True
+        session['last_access_time'] = time.time()
+        
+        # storageモジュール経由で送信
+        storage.send_to_google_form(bib_number, student_id, "ログイン")
+        return redirect("/monitor")
 
-    .timestamp {
-      font-size: 18px;
-      font-weight: 600;
-      color: var(--text-main);
-    }
+    is_logged_in = 'bib_number' in session
 
-    .status-title {
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--text-main);
-      margin: 0;
-      /* Removing bottom margin to align with flex */
-    }
+    if is_logged_in:
+        login_date = session.get('login_date')
+        if login_date != get_today_str():
+            session.clear()
+            return redirect("/monitor")
+        
+        bib_number = session.get('bib_number')
+        student_id = session.get('student_id', '不明')
+        
+        if session.get('just_logged_in'):
+            session.pop('just_logged_in', None)
+        else:
+            last_time = session.get('last_access_time', 0)
+            if (time.time() - last_time) > HEARTBEAT_INTERVAL:
+                storage.send_to_google_form(bib_number, student_id, "再訪問")
+            else:
+                storage.send_to_google_form(bib_number, student_id, "再読み込み")
+        session['last_access_time'] = time.time()
 
-    /* Badge Redesign */
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background-color: var(--badge-bg);
-      color: var(--badge-text);
-      padding: 8px 24px;
-      border-radius: 9999px;
-      /* Pill shape */
-      font-size: 24px;
-      font-weight: 700;
-      margin-bottom: 10px;
-      box-shadow: 0 2px 4px rgba(37, 99, 235, 0.1);
-    }
+    return render_template('index.html', is_logged_in=is_logged_in)
 
-    .icon-person {
-      width: 1.2em;
-      height: 1.2em;
-      display: inline-block;
-      background-color: currentColor;
-      -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath fill-rule='evenodd' d='M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z' clip-rule='evenodd' /%3E%3C/svg%3E");
-      mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath fill-rule='evenodd' d='M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z' clip-rule='evenodd' /%3E%3C/svg%3E");
-      -webkit-mask-repeat: no-repeat;
-      mask-repeat: no-repeat;
-      -webkit-mask-position: center;
-      mask-position: center;
-      -webkit-mask-size: contain;
-      mask-size: contain;
-      margin-right: 4px;
-    }
+@app.route('/logout')
+def logout():
+    session.pop('bib_number', None)
+    session.pop('student_id', None)
+    return redirect('/')
 
-    .icon-person.gray {
-      background-color: #9CA3AF !important;
-    }
+@app.route('/api/congestion')
+def get_congestion():
+    try:
+        # -----------------------------------------------
+        # 視聴ログ (Heartbeat)
+        # -----------------------------------------------
+        if 'bib_number' in session:
+            last_time = session.get('last_access_time', 0)
+            current_time = time.time()
+            
+            if (current_time - last_time) > HEARTBEAT_INTERVAL:
+                bib = session['bib_number']
+                stu = session.get('student_id', '不明')
+                storage.send_to_google_form(bib, stu, "視聴中")
+                session['last_access_time'] = current_time
 
-    /* Status Colors */
-    .status-badge.level-1 {
-      background-color: #DBEAFE;
-      color: #1E40AF;
-      /* Blue */
-    }
+        # -----------------------------------------------
+        # AWSデータ取得
+        # -----------------------------------------------
+        try:
+            response = requests.get(API_URL, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"API Request Error: {e}")
+            return jsonify({"error": "Failed to fetch data from AWS"}), 502
+        
+        # 1. データパース
+        w_current = float(data.get('W', 0))
+        in1_ave = float(data.get('in_1ave3', 0))
+        in2_ave = float(data.get('in_2ave5', 0))
+        d1 = float(data.get('d1', 0))
+        d2 = float(data.get('d2', 0))
+        d3 = float(data.get('d3', 0))
+        timestamp_str = data.get('datetime')
 
-    .status-badge.level-2 {
-      background-color: #FEF3C7;
-      color: #92400E;
-      /* Yellow/Orange */
-    }
+        # 2. モデル予測 (T+5)
+        predicted_people = model.predict_model2(
+            w_current, in1_ave, in2_ave, d1, d2, d3
+        )
+        
+        # 3. 現在の待ち時間計算
+        display_base_people = w_current if w_current > 0 else 0
+            
+        wait_min_val = display_base_people / model.PEOPLE_PER_MINUTE
+        display_minutes = int(wait_min_val)
+        display_seconds = int((wait_min_val - display_minutes) * 60)
 
-    .status-badge.level-3 {
-      background-color: #FEE2E2;
-      color: #B91C1C;
-      /* Red */
-    }
+        # 4. 混雑予報判定
+        forecast_text = "stable"
+        forecast_val = "-"
+        diff_people = predicted_people - w_current
+        
+        # Threshold for "same"
+        if abs(diff_people) > 0.1:
+            diff_wait_time = abs(diff_people) / model.PEOPLE_PER_MINUTE
+            dm = int(diff_wait_time)
+            ds = int((diff_wait_time - dm) * 60)
+            
+            # Format time string
+            if dm == 0:
+                val_str = f"{ds}秒"
+            else:
+                val_str = f"{dm}分{ds:02d}秒"
+            
+            forecast_val = val_str
+            
+            if diff_people > 0:
+                forecast_text = "increase"
+            else:
+                forecast_text = "decrease"
 
-    .status-badge.level-off {
-      background-color: #F3F4F6;
-      color: #6B7280;
-      /* Gray */
-    }
+        # 5. データ保存 (Google Form)
+        # -----------------------------------------------
+        pred_wait_min = predicted_people / model.PEOPLE_PER_MINUTE
+        
+        # storageモジュール経由で混雑ログ送信
+        if timestamp_str:
+            storage.log_congestion_to_form(timestamp_str, wait_min_val, pred_wait_min)
 
+        # 6. 履歴データの読み出し (Google Sheet CSV)
+        # -----------------------------------------------
+        history_data = storage.fetch_congestion_history(get_today_str())
 
-    .wait-time {
-      font-size: 64px;
-      /* Larger */
-      font-weight: 800;
-      color: var(--primary-color);
-      line-height: 1.1;
-      margin-top: 10px;
-    }
-
-    .wait-time span {
-      font-size: 28px;
-      color: var(--text-sub);
-      /* Units in gray for contrast */
-      font-weight: 600;
-      margin: 0 8px 0 2px;
-    }
-
-    .forecast-text {
-      font-size: 20px;
-      font-weight: 600;
-      margin-bottom: 30px;
-      color: var(--text-main);
-      display: inline-block;
-    }
-
-    .chart-container {
-      width: 100%;
-      height: 320px;
-      position: relative;
-    }
-
-    /* Login Styles (Merged from old index.html) */
-    .login-container {
-      max-width: 400px;
-      width: 100%;
-      /* Ensure responsiveness */
-      margin: 0 auto;
-      background: white;
-      padding: 30px;
-      border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-      text-align: center;
-    }
-
-    .login-input {
-      font-size: 1.5em;
-      width: 80%;
-      padding: 10px;
-      margin: 20px 0;
-      text-align: center;
-      border: 1px solid #ddd;
-      border-radius: 5px;
-    }
-
-    .login-button {
-      font-size: 1.2em;
-      padding: 10px 40px;
-      background-color: #007bff;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-
-    /* Mobile Responsiveness */
-    @media (max-width: 600px) {
-      body {
-        padding: 5px 10px;
-        justify-content: flex-start;
-      }
-
-      .card {
-        padding: 20px 15px;
-        /* Reduced padding */
-      }
-
-      h1 {
-        font-size: 24px;
-      }
-
-      .info-text {
-        font-size: 14px;
-        margin-bottom: 20px;
-      }
-
-      .status-section {
-        padding: 15px 0;
-      }
-
-      .status-title {
-        font-size: 16px;
-      }
-
-      .timestamp {
-        font-size: 14px;
-      }
-
-      .status-badge {
-        font-size: 18px;
-        padding: 6px 16px;
-        width: 100%;
-        /* Full width on mobile for better alignment */
-        box-sizing: border-box;
-      }
-
-      .wait-time {
-        font-size: 48px;
-      }
-
-      .wait-time span {
-        font-size: 20px;
-      }
-
-      .forecast-text {
-        font-size: 16px;
-        width: 100%;
-        box-sizing: border-box;
-      }
-
-      .chart-container {
-        height: 250px;
-        /* Slightly shorter chart */
-      }
-
-      .login-container {
-        margin: auto;
-      }
-    }
-  </style>
-</head>
-
-<body>
-  {% if not is_logged_in %}
-  <div class="login-container">
-    <h2>実証実験への参加<br>ありがとうございます</h2>
-    <p>学籍番号とビブス番号を入力して<br>「開始」を押してください。</p>
-    <form method="POST" action="/monitor">
-      <input type="text" name="student_id" class="login-input" placeholder="学籍番号" required autofocus>
-      <input type="number" name="bib_number" class="login-input" placeholder="ビブスNo." required>
-      <br><button type="submit" class="login-button">開始</button>
-    </form>
-  </div>
-  {% else %}
-  <div class="container">
-    <div class="card">
-      <h1>食堂混雑状況</h1>
-      <div class="info-text">食事提供：11:30 ～ 13:30</div>
-      <!-- <div class="info-text">最終更新: <span id="last-update">--:--</span></div> Removed from here -->
-
-      <div class="status-section">
-        <div class="header-row">
-          <div class="status-title">現在の待ち時間</div>
-          <div class="timestamp"><span id="last-update">--:--</span> 時点</div>
-        </div>
-
-        <div class="status-badge" id="status-badge">
-          <span class="icon-person"></span>
-          <span class="icon-person gray"></span>
-          <span class="icon-person gray"></span>
-          空いています
-        </div>
-
-        <div class="wait-time" id="wait-time">
-          --<span>分</span>--<span>秒</span>
-        </div>
-        <!-- Error Message Hidden by Default -->
-        <div id="error-message" style="display: none; color: #dc3545; margin-top: 15px; font-size: 1.2em;">予測データはありません
-        </div>
-      </div>
-
-      <div class="forecast-text" id="forecast-container" style="display:none;">
-        <span id="forecast-icon"></span> <span id="forecast-message"></span>
-      </div>
-
-      <div class="chart-container">
-        <canvas id="congestionChart"></canvas>
-      </div>
-
-      <div style="margin-top: 20px;">
-        <a href="https://aimgrp-lgf.jp/0002243" target="_blank" rel="noopener noreferrer"
-          style="color: var(--primary-color); font-weight: 600; text-decoration: none;">メニューはこちらから</a>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // --- Chart Logic (from index2.html) ---
-    const ctx = document.getElementById('congestionChart').getContext('2d');
-
-    // Logic for data is same, just refined visualization properties
-    const labels = [];
-    const startHour = 11;
-    const endHour = 14;
-    for (let h = startHour; h <= endHour; h++) {
-      for (let m = 0; m < 60; m += 1) {
-        if (h === endHour && m > 0) break;
-        const timeStr = `${h}:${m.toString().padStart(2, '0')}`;
-        labels.push(timeStr);
-      }
-    }
-
-    const PEOPLE_PER_MINUTE = 6.66; // Constant for conversion
-
-    // Initialize with nulls to prevent flickering
-    const actualData = labels.map(() => null);
-    const predictedData = labels.map(() => null);
-
-    const chart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: '今までの待ち時間', // Updated Label
-            data: actualData,
-            backgroundColor: '#CBD5E1',
-            hoverBackgroundColor: '#94A3B8',
-            barPercentage: 1.0,
-            categoryPercentage: 1.0,
-            order: 2
-          },
-          {
-            type: 'line',
-            label: '待ち時間予測', // Updated Label
-            data: predictedData,
-            borderColor: '#2563EB',
-            backgroundColor: 'rgba(37, 99, 235, 0.1)',
-            borderWidth: 3,
-            pointRadius: 0, // Updated dynamically in updateDisplay
-            pointBackgroundColor: '#FFFFFF',
-            pointBorderColor: '#2563EB',
-            pointBorderWidth: 3,
-            pointHoverRadius: 8,
-            tension: 0.4,
-            fill: true,
-            order: 1,
-            spanGaps: true, // Connect lines across nulls
-            segment: {
-              borderColor: ctx => {
-                const actual = ctx.chart.data.datasets[0].data;
-                if (actual[ctx.p1DataIndex] === null || actual[ctx.p1DataIndex] === undefined) {
-                  return '#F59E0B'; // Orange for future
-                }
-                return undefined;
-              },
-              borderDash: ctx => {
-                const actual = ctx.chart.data.datasets[0].data;
-                // If p1 (destination) has no actual data, it's a prediction line.
-                if (actual[ctx.p1DataIndex] === null || actual[ctx.p1DataIndex] === undefined) {
-                  return [3, 3];
-                }
-                return undefined;
-              }
-            }
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: {
-              usePointStyle: true,
-              boxWidth: 8,
-              padding: 20,
-              font: {
-                size: 12
-              }
-            }
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-            backgroundColor: 'rgba(17, 24, 39, 0.9)',
-            padding: 10,
-            cornerRadius: 8,
-            callbacks: {
-              label: function (context) {
-                let label = context.dataset.label || '';
-                if (label) {
-                  label += ': ';
-                }
-                if (context.parsed.y !== null) {
-                  const m = Math.floor(context.parsed.y);
-                  const s = Math.floor((context.parsed.y - m) * 60);
-                  label += `${m}分${s}秒`;
-                }
-                return label;
-              }
-            }
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            max: 10, // Max 10 minutes
-            ticks: {
-              stepSize: 2, // 2 minute steps
-              font: {
-                size: 11,
-                color: '#9CA3AF'
-              },
-              callback: function (value) { return value + '分'; } // Add unit
-            },
-            grid: {
-              color: '#F3F4F6'
-            },
-            border: {
-              display: false
-            }
-          },
-          x: {
-            grid: {
-              display: false
-            },
-            ticks: {
-              maxRotation: 0,
-              minRotation: 0,
-              autoSkip: true,
-              autoSkipPadding: 20,
-              font: {
-                size: 11
-              },
-              color: '#6B7280'
-            },
-            border: {
-              display: false
-            }
-          }
+        # 7. レスポンス作成
+        response_data = {
+            "current_people": w_current,
+            "predicted_people": predicted_people,
+            "wait_minutes": wait_min_val,
+            "display_minutes": display_minutes,
+            "display_seconds": display_seconds,
+            "forecast_text": forecast_text,
+            "forecast_val": forecast_val,
+            "last_clip_ts": timestamp_str,
+            "history": history_data
         }
-      }
-    });
+        
+        return jsonify(response_data)
 
-    // --- Data Fetching Logic (Merged) ---
-    const API_URL = "/api/congestion";
-    const UPDATE_INTERVAL = 30000;
-    let intervalTimer;
+    except Exception as e:
+        print(f"Error in /api/congestion: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
 
-    function updateCongestionVisuals(waitMinutesFloat) {
-      const badgeEl = document.getElementById("status-badge");
-      // const waitEl = document.getElementById("wait-time"); // waitEl style is constant color in index2.html, only value changes
-
-      if (!badgeEl) return;
-
-      // Reset classes
-      badgeEl.className = 'status-badge';
-
-      let iconsHtml = '';
-      let text = '';
-
-      const iconActive = '<span class="icon-person"></span>';
-      const iconInactive = '<span class="icon-person gray"></span>';
-      const iconSlash = '<i class="fa-solid fa-shop-slash icon-inactive"></i>'; // Fallback if font awesome loaded, or use svg
-
-      if (isNaN(waitMinutesFloat)) {
-        // Out of service
-        badgeEl.innerHTML = '提供時間外';
-        badgeEl.classList.add("level-off");
-      } else if (waitMinutesFloat <= 2) {
-        // Empty
-        iconsHtml = iconActive + iconInactive + iconInactive;
-        text = "空いています";
-        badgeEl.classList.add("level-1");
-      } else if (waitMinutesFloat <= 4) {
-        // Slightly crowded
-        iconsHtml = iconActive + iconActive + iconInactive;
-        text = "やや混雑";
-        badgeEl.classList.add("level-2");
-      } else {
-        // Crowded
-        iconsHtml = iconActive + iconActive + iconActive;
-        text = "混雑";
-        badgeEl.classList.add("level-3");
-      }
-
-      if (!isNaN(waitMinutesFloat)) {
-        badgeEl.innerHTML = iconsHtml + text;
-      }
-    }
-
-    async function updateDisplay() {
-      try {
-        const res = await fetch(API_URL + '?t=' + new Date().getTime());
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-
-        // --- Time ---
-        const rawTimeStr = data.last_clip_ts;
-        let formattedTime = "--:--";
-        if (rawTimeStr) {
-          const dateObj = new Date(rawTimeStr);
-          if (!isNaN(dateObj.getTime())) {
-            formattedTime = dateObj.getHours().toString().padStart(2, '0') + ":" + dateObj.getMinutes().toString().padStart(2, '0');
-          }
-        }
-        const lastUpdateEl = document.getElementById("last-update");
-        if (lastUpdateEl) lastUpdateEl.innerText = formattedTime;
-
-        // --- Chart Update (Real History) ---
-        if (data.history && Array.isArray(data.history)) {
-          // Reset data arrays
-          chart.data.datasets[0].data = labels.map(() => null);
-          chart.data.datasets[1].data = labels.map(() => null);
-
-          let lastIdx = -1;
-
-          data.history.forEach(record => {
-            const ts = new Date(record.timestamp);
-            if (!isNaN(ts.getTime())) {
-              const h = ts.getHours();
-              const m = ts.getMinutes();
-              // Exact 1-minute matching
-              const timeStr = `${h}:${m.toString().padStart(2, '0')}`;
-
-              const idx = labels.indexOf(timeStr);
-              if (idx !== -1) {
-                chart.data.datasets[0].data[idx] = record.wait_minutes;
-                chart.data.datasets[1].data[idx] = record.predicted_wait_minutes;
-                lastIdx = idx;
-              }
-            }
-          });
-
-          // Add Future Prediction Point (5 mins after last data)
-          // Since labels are 1-min interval, 5 mins later is index + 5
-          if (lastIdx !== -1 && lastIdx < labels.length - 5) {
-            const futureIdx = lastIdx + 5;
-            // Use the latest predicted value for the future point
-            const futureWaitMin = data.predicted_people / PEOPLE_PER_MINUTE;
-            chart.data.datasets[1].data[futureIdx] = futureWaitMin;
-          }
-
-          // Highlight current point (lastIdx)
-          if (lastIdx !== -1) {
-            chart.data.datasets[1].pointRadius = ctx => ctx.dataIndex === lastIdx ? 6 : 0;
-          }
-
-          chart.update();
-        }
-
-        // --- Wait Time ---
-        const displayMinutes = data.display_minutes !== undefined ? data.display_minutes : 0;
-        const displaySeconds = data.display_seconds !== undefined ? data.display_seconds : 0;
-        const waitTimeEl = document.getElementById("wait-time");
-
-        if (waitTimeEl) {
-          const secStr = displaySeconds.toString().padStart(2, '0');
-          // Format: X分 Y秒 with specific styling
-          waitTimeEl.innerHTML =
-            `<span style="font-size: 3.5rem; font-weight: 700;">${displayMinutes}</span>` +
-            `<span style="font-size: 1.5rem; font-weight: 600; margin-left: 4px;">分</span>` +
-            `<span style="font-size: 3.5rem; font-weight: 700; margin-left: 12px;">${secStr}</span>` +
-            `<span style="font-size: 1.5rem; font-weight: 600; margin-left: 4px;">秒</span>`;
-        }
-
-        // --- Forecast ---
-        const forecastContainer = document.getElementById("forecast-container");
-        const forecastIcon = document.getElementById("forecast-icon");
-        const forecastMessage = document.getElementById("forecast-message");
-
-        if (forecastContainer) {
-          forecastContainer.style.display = "none"; // Default hide
-
-          if (data.forecast_text === "increase") {
-            forecastContainer.style.display = "inline-block";
-            forecastIcon.innerText = "📈";
-            forecastMessage.innerText = `${data.forecast_val}後は今より混みます`;
-          } else if (data.forecast_text === "decrease") {
-            forecastContainer.style.display = "inline-block";
-            forecastIcon.innerText = "📉";
-            forecastMessage.innerText = `${data.forecast_val}後は今より空いています`;
-          }
-        }
-
-        // --- Visuals ---
-        updateCongestionVisuals(data.wait_minutes);
-
-        // Hide Error
-        const errorMsg = document.getElementById("error-message");
-        if (errorMsg) errorMsg.style.display = "none";
-
-      } catch (e) {
-        console.error("データ取得エラー:", e);
-        const errorMsg = document.getElementById("error-message");
-        if (errorMsg) errorMsg.style.display = "block";
-      }
-    }
-
-    // Cleanup
-    window.addEventListener('beforeunload', () => {
-      if (intervalTimer) clearInterval(intervalTimer);
-    });
-
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function () {
-        updateDisplay();
-        intervalTimer = setInterval(updateDisplay, UPDATE_INTERVAL);
-      });
-    } else {
-      updateDisplay();
-      intervalTimer = setInterval(updateDisplay, UPDATE_INTERVAL);
-    }
-  </script>
-  {% endif %}
-</body>
-
-</html>
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000)
