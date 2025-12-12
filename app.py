@@ -135,28 +135,27 @@ def get_congestion():
 
         # 4. 混雑予報判定
         forecast_text = "stable"
-        forecast_val = "-" 
-        diff = predicted_people - w_current
-        THRESHOLD = 0
+        forecast_val = "-"
+        diff_people = predicted_people - w_current
         
-        if diff > THRESHOLD:
-            diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
-            diff_minutes = int(diff_wait_time)
-            diff_seconds = int((diff_wait_time - diff_minutes) * 60)
-            forecast_text = "increase"
-            if diff_minutes == 0:
-                forecast_val = f"{diff_seconds}秒"
+        # Threshold for "same"
+        if abs(diff_people) > 0.1:
+            diff_wait_time = abs(diff_people) / model.PEOPLE_PER_MINUTE
+            dm = int(diff_wait_time)
+            ds = int((diff_wait_time - dm) * 60)
+            
+            # Format time string
+            if dm == 0:
+                val_str = f"{ds}秒"
             else:
-                forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
-        elif diff < -THRESHOLD:
-            diff_wait_time = abs(diff) / model.PEOPLE_PER_MINUTE
-            diff_minutes = int(diff_wait_time)
-            diff_seconds = int((diff_wait_time - diff_minutes) * 60)
-            forecast_text = "decrease"
-            if diff_minutes == 0:
-                forecast_val = f"{diff_seconds}秒"
+                val_str = f"{dm}分{ds:02d}秒"
+            
+            forecast_val = val_str
+            
+            if diff_people > 0:
+                forecast_text = "increase"
             else:
-                forecast_val = f"{diff_minutes}分{diff_seconds:02d}秒"
+                forecast_text = "decrease"
 
         # 5. データ保存 (Google Form)
         # -----------------------------------------------
